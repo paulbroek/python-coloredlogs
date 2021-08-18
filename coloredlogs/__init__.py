@@ -207,6 +207,11 @@ import re
 import socket
 import sys
 
+# added by paul
+import copy 
+import textwrap 
+from itertools import chain
+
 # External dependencies.
 from humanfriendly import coerce_boolean
 from humanfriendly.compat import coerce_string, is_string, on_windows
@@ -942,8 +947,89 @@ def walk_propagation_tree(logger):
             # The propagation chain stops here.
             logger = None
 
-
+# added by paul
 class BasicFormatter(logging.Formatter):
+    """Multi-line formatter.
+
+        replacing coloredlogs basicformatter, since I cannot find another way
+    """
+
+    def __init__(self, **kwargs):
+
+        self.width = 145
+        super().__init__(**kwargs)
+
+    def get_header_length(self, record):
+        """Get the header length of a given record."""
+        record = copy.copy(record)
+        record.msg = ''
+        record.exc_info = None
+        record.exc_text = None
+        record.stack_info = None
+        header = super().format(record)
+        # tiny problem: the color characters are part of the header, how to get pure header length?
+        # --> strip the ASCII color chars using regex
+        header = re.sub('\033\\[([0-9]+)(;[0-9]+)*m', '', header)
+        #self.my_header = header
+        return len(header)
+
+    def format(self, record):
+        """Format a record with added indentation."""
+        message = record.msg
+        # For now we only indent string typed messages
+        # Other message types like list or bytes won't be touched
+        if isinstance(message, str):
+            # wrap text into fixed width block
+            #msgs = '\n'.join()
+            #msgs = textwrap.wrap(message, width=self.width, replace_whitespace=False, subsequent_indent='  ') # default subsequent_indent == ''
+            #msgs = msgs.splitlines(True)
+            texts = message.split('\n')
+            # I use itertools to repeatedly wrap the sub texts, this is the only to honour any '\n' in a log message
+            msgs = list(chain(*[textwrap.wrap(t, width=self.width, subsequent_indent='  ')  for t in texts]))
+            msgs = [f'{msg}\n' if i != len(msgs) else msg for i,msg in enumerate(msgs, start=1)]
+            #print(f'{msgs=}')
+            if len(msgs) > 1:
+                header_len = self.get_header_length(record)
+
+                # Indent lines (except the first line)
+                indented_message = msgs[0] + ''.join(map(
+                    lambda m: ' ' * header_len + m if m != '\n' else m, msgs[1:]))
+                # Use the original formatter since it handles exceptions well
+                record.msg = indented_message
+                formatted_text = super().format(record)
+                # Revert to keep the msg field untouched
+                # As other modules may capture the log for further processing
+                record.msg = message
+                return formatted_text
+
+        return super().format(record)
+
+    def formatTime(self, record, datefmt=None):
+        """
+        Format the date/time of a log record.
+
+        :param record: A :class:`~logging.LogRecord` object.
+        :param datefmt: A date/time format string (defaults to :data:`DEFAULT_DATE_FORMAT`).
+        :returns: The formatted date/time (a string).
+
+        This method overrides :func:`~logging.Formatter.formatTime()` to set
+        `datefmt` to :data:`DEFAULT_DATE_FORMAT` when the caller hasn't
+        specified a date format.
+
+        When `datefmt` contains the token ``%f`` it will be replaced by the
+        value of ``%(msecs)03d`` (refer to issue `#45`_ for use cases).
+        """
+        # The default value of the following argument is defined here so
+        # that Sphinx doesn't embed the default value in the generated
+        # documentation (because the result is awkward to read).
+        datefmt = datefmt or DEFAULT_DATE_FORMAT
+        # Replace %f with the value of %(msecs)03d.
+        if '%f' in datefmt:
+            datefmt = datefmt.replace('%f', '%03d' % record.msecs)
+        # Delegate the actual date/time formatting to the base formatter.
+        return logging.Formatter.formatTime(self, record, datefmt)
+
+class BasicFormatter2(logging.Formatter):
 
     """
     Log :class:`~logging.Formatter` that supports ``%f`` for millisecond formatting.
@@ -1030,7 +1116,8 @@ class ColoredFormatter(BasicFormatter):
         if style != DEFAULT_FORMAT_STYLE:
             kw['style'] = style
         # Initialize the superclass with the rewritten format string.
-        logging.Formatter.__init__(self, **kw)
+        #logging.Formatter.__init__(self, **kw)
+        BasicFormatter.__init__(self, **kw) # changed by paul
 
     def colorize_format(self, fmt, style=DEFAULT_FORMAT_STYLE):
         """
@@ -1137,7 +1224,8 @@ class ColoredFormatter(BasicFormatter):
             copy.msg = ansi_wrap(coerce_string(record.msg), **style)
             record = copy
         # Delegate the remaining formatting to the base formatter.
-        return logging.Formatter.format(self, record)
+        #return logging.Formatter.format(self, record)
+        return BasicFormatter.format(self, record) # changed by paul
 
 
 class Empty(object):
